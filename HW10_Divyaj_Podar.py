@@ -1,11 +1,10 @@
-
 """Assignment 10, part 2 of project"""
-
 
 """Importing modules"""
 import os
 from collections import defaultdict
 from prettytable import PrettyTable
+import sqlite3
 
 
 #File reader
@@ -42,9 +41,9 @@ class Student:
         self.major = major
         self.courses = defaultdict(str)
         
-        self.completed_courses = None
-        self.remaining_required = None
-        self.remaining_electives = None
+        self.completed_courses = set()
+        self.remaining_required = set()
+        self.remaining_electives = set()
         
     def course_filler(self, course, grade):
         """fills the self.courses in the __init__ function"""
@@ -52,12 +51,12 @@ class Student:
     
     def course_seg(self, major_instance):
         """Uses instance of major and uses its method to sort the courses and store it"""
-        self.completed_courses, self.remaining_required,        self.remaining_electives = major_instance.course_segergator(self.courses)
+        self.completed_courses, self.remaining_required, self.remaining_electives = major_instance.course_segergator(self.courses)
         
         
     def pretty_table(self, pt):
         """adds a row to the repository created student pretty table"""
-        pt.add_row([self.cwid, self.name, self.major, sorted(self.completed_courses),                   self.remaining_required, self.remaining_electives])
+        pt.add_row([self.cwid, self.name, self.major, sorted(self.completed_courses), self.remaining_required, self.remaining_electives])
 
 
 class Instructor:
@@ -79,9 +78,6 @@ class Instructor:
         """adds a row to the repository created instructor pretty table"""
         for course, num_students in self.courses.items():
             pt.add_row([self.cwid, self.name, self.dept, course, num_students])
-
-
-# In[205]:
 
 
 class Major:
@@ -117,13 +113,16 @@ class Major:
             
             if course in self.required and grade in self.valid_grade:
                 remaining_required.remove(course)
+                
+                if len(remaining_required) == 0:
+                    remaining_required = None
         
         return completed_courses, remaining_required, remaining_elective
 
     def pretty_table(self, pt):
         """adds a row to the repository created major pretty table"""
         pt.add_row([self.major, sorted(self.required), sorted(self.elective)])
-    
+
 
 class Repository:
                 
@@ -133,6 +132,7 @@ class Repository:
         self.student_dict = dict()
         self.instructor_dict = dict()
         self.major_dict = dict()
+
         
         self.get_major()
         self.get_student()
@@ -142,6 +142,7 @@ class Repository:
         
         if p_table == True:
             self.pretty_tables()
+    
     
     def pretty_tables(self):
         """prints the pretty tables conatining all the summary"""
@@ -157,7 +158,8 @@ class Repository:
         for cwid in self.instructor_dict:
             self.instructor_dict[cwid].pretty_table(pt_ins)
         
-        print (f'Majors Summary\n{pt_maj}\nStudent Summary\n{pt_stu}\nInstructor Summary\n{pt_ins}')
+        print(f"Majors Summary\n{pt_maj}\nStudent Summary\n{pt_stu}\nInstructor Summary from Flat File\n{pt_ins},              \nInstructor Summary from Database\n{self.instructor_table_db()}")
+    
     
     def get_major(self):
         """opens majors.txt and creates major instances"""
@@ -170,40 +172,43 @@ class Repository:
             for major, req, course in mjr_details:
                 if major not in self.major_dict:
                     self.major_dict[major] = Major(major)
-                
+
                 self.major_dict[major].requirement_filler(req, course)
         
-        except ValueError:
-            print(f"For major: {major}, number of fields != required number of fields")
+        except ValueError as ve:
+            print(f"For the file: {ve}")
         
         except FileNotFoundError:
-            raise FileNotFoundError("majors.txt cannot be found/opened")
+            print("majors.txt cannot be found/opened")
             
+
     def get_student(self):
         """opens students.txt and create student instances"""
         path = os.path.join(self.directory, 'students.txt')
         
-        std_details = file_reading_gen(path, 3, sep=';', header=True)
+        std_details = file_reading_gen(path, 3, sep='\t', header=True)
         
         try:
             for cwid, name, major in std_details:
+                
                 if cwid not in self.student_dict:
                     self.student_dict[cwid] = Student(cwid, name, major)
                 else:
                     print (f"DUPLICATE student CWID: {cwid}")
         
-        except ValueError:
-            print(f"For CWID: {cwid}, number of fields != required number of fields")
+        except ValueError as ve:
+            print(f"For the file: {ve}")
             
         except FileNotFoundError:
-            raise FileNotFoundError("students.txt cannot be found/opened")
+            print("students.txt cannot be found/opened")
         
+
     def get_instructor(self):
         """opens instructors.txt and create instructor instances"""
         path = os.path.join(self.directory, 'instructors.txt')
         
-        ins_details = file_reading_gen(path, 3, sep='|', header=True)
-        
+        ins_details = file_reading_gen(path, 3, sep='\t', header=True)
+            
         try:
             for cwid, name, dept in ins_details:
                 if cwid not in self.instructor_dict:
@@ -211,31 +216,40 @@ class Repository:
                 else:
                     print (f"DUPLICATE instructor CWID: {cwid}")
                     
-        except ValueError:
-            print(f"For CWID: {cwid}, number of fields != required number of fields")
-            
-        except FileNotFoundError:
-            raise FileNotFoundError("instructors.txt cannot be found/opened")
+        except ValueError as ve:
+            print(f"For the file: {ve}")
         
+        except FileNotFoundError:
+            print("instructors.txt cannot be found/opened")
+
+            
     def get_grades(self):
         """opens grades.txt and populates other classes"""
         path = os.path.join(self.directory, 'grades.txt')
         
-        grades_details = file_reading_gen(path, 4, sep='|', header=True)
+        grades_details = file_reading_gen(path, 4, sep='\t', header=True)
+        
         
         try:
             for s_cwid, course, grade, i_cwid in grades_details:
-                if s_cwid in self.student_dict:
+                
+                try:
                     self.student_dict[s_cwid].course_filler(course, grade)
-                if i_cwid in self.instructor_dict:
+                except KeyError:
+                    print (f"student with CWID: {s_cwid}, does not exist in students.txt")
+                    
+                try:
                     self.instructor_dict[i_cwid].course_filler(course)
+                except KeyError:
+                    print (f"student with CWID: {i_cwid}, does not exist in students.txt")
         
-        except ValueError:
-            print(f"For s_cwid: {s_cwid}, number of fields != required number of fields")
+        except ValueError as ve:
+            print(f"For the file: {ve}")
         
         except FileNotFoundError:
             print ("grades.txt cannot be opened")
-    
+
+   
     def req_elc(self):
         """sorts the requirement of the courses"""
         for cwid in self.student_dict:
@@ -244,9 +258,29 @@ class Repository:
             
             try:
                 student_info.course_seg(self.major_dict[student_major])
-            except:
-                print (f"Student with cwid {cwid} has a major {student_major} which is not in repository")
+            
+            except KeyError:
+                print(f"Student with CWID: {cwid}, has major : '{student_major}' which is not in majors.txt")
+    
+    def instructor_table_db(self):
+        
+        db_path = os.path.join(self.directory, 'database.db')
+        db = sqlite3.connect(db_path)
+        
+        query = """SELECT i.CWID, i.Name, i.Dept, g.Course, COUNT(g.StudentCWID) AS Students
+                    FROM instructors AS i
+                    JOIN grades AS g
+                    ON i.CWID = g.InstructorCWID
+                    GROUP BY g.Course, g.InstructorCWID
+                    ORDER BY i.CWID DESC, COUNT(g.StudentCWID) DESC"""
+        
+        pt_db_ins = PrettyTable(field_names=['CWID', 'Name', 'Dept', 'Course', 'Students'])
+        
+        for CWID, Name, Dept, Course, Students in db.execute(query):
+            pt_db_ins.add_row([CWID, Name, Dept, Course, Students])
+        
+        return pt_db_ins
 
 
 if __name__ == "__main__":
-    stevens = Repository('/Users/divyaj_podar/downloads/stevens_updated', True)
+    stevens = Repository('/Users/divyaj_podar/downloads/stevens_11', True)
